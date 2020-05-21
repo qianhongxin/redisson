@@ -124,6 +124,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         super(commandExecutor, name);
         this.commandExecutor = commandExecutor;
         this.id = commandExecutor.getConnectionManager().getId();
+        // 获取看门狗
         this.internalLockLeaseTime = commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout();
         this.entryName = id + ":" + name;
         this.pubSub = commandExecutor.getConnectionManager().getSubscribeService().getLockPubSub();
@@ -171,6 +172,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
     }
 
     private void lock(long leaseTime, TimeUnit unit, boolean interruptibly) throws InterruptedException {
+        // 拿到当前线程id
         long threadId = Thread.currentThread().getId();
         Long ttl = tryAcquire(leaseTime, unit, threadId);
         // lock acquired
@@ -243,6 +245,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         if (leaseTime != -1) {
             return tryLockInnerAsync(leaseTime, unit, threadId, RedisCommands.EVAL_LONG);
         }
+        // commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout()  默认看门狗的释放锁时间，默认30秒
         RFuture<Long> ttlRemainingFuture = tryLockInnerAsync(commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout(), TimeUnit.MILLISECONDS, threadId, RedisCommands.EVAL_LONG);
         ttlRemainingFuture.onComplete((ttlRemaining, e) -> {
             if (e != null) {
@@ -351,6 +354,25 @@ public class RedissonLock extends RedissonExpirable implements RLock {
     <T> RFuture<T> tryLockInnerAsync(long leaseTime, TimeUnit unit, long threadId, RedisStrictCommand<T> command) {
         internalLockLeaseTime = unit.toMillis(leaseTime);
 
+        // 执行lua脚本，针对redis加锁的一段命令。redis单线程执行命令的，所以执行lua是原子的
+        // 如果KEYS[1]不存在
+        //if (redis.call('exists', KEYS[1]) == 0) then " +
+        // 将KEYS[1]这个key对应的ARGV[2]参数设置1
+        //"redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
+        // 将KEYS[1]的有效期设为ARGV[1]
+        //"redis.call('pexpire', KEYS[1], ARGV[1]); " +
+        //"return nil; " +
+        //"end; " +
+        // 如果KEYS[1]存在
+        //"if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " +
+        // 将KEYS[1]这个key对应的ARGV[2]参数累加1
+        //"redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
+        // 再次将KEYS[1]的有效期设为ARGV[1]
+        //"redis.call('pexpire', KEYS[1], ARGV[1]); " +
+        //"return nil; " +
+        //"end; " +
+        // 返回KEYS[1]剩余存活时间
+        //"return redis.call('pttl', KEYS[1]);
         return evalWriteAsync(getName(), LongCodec.INSTANCE, command,
                 "if (redis.call('exists', KEYS[1]) == 0) then " +
                         "redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
