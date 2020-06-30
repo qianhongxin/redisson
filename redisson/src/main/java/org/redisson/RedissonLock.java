@@ -124,7 +124,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         super(commandExecutor, name);
         this.commandExecutor = commandExecutor;
         this.id = commandExecutor.getConnectionManager().getId();
-        // 获取看门狗
+        // 锁过期时间，默认30s
         this.internalLockLeaseTime = commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout();
         this.entryName = id + ":" + name;
         this.pubSub = commandExecutor.getConnectionManager().getSubscribeService().getLockPubSub();
@@ -243,10 +243,13 @@ public class RedissonLock extends RedissonExpirable implements RLock {
 
     private <T> RFuture<Long> tryAcquireAsync(long leaseTime, TimeUnit unit, long threadId) {
         if (leaseTime != -1) {
+            // 自定义锁每次的过期时间
             return tryLockInnerAsync(leaseTime, unit, threadId, RedisCommands.EVAL_LONG);
         }
         // commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout()  默认看门狗的释放锁时间，默认30秒
+        // 执行加锁逻辑，锁默认是30s（commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout()=30s）过期
         RFuture<Long> ttlRemainingFuture = tryLockInnerAsync(commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout(), TimeUnit.MILLISECONDS, threadId, RedisCommands.EVAL_LONG);
+        // ttlRemainingFuture封装的是当前的key对应的剩余的存活时间，单位是ms
         ttlRemainingFuture.onComplete((ttlRemaining, e) -> {
             if (e != null) {
                 return;
@@ -344,6 +347,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
 
     protected <T> RFuture<T> evalWriteAsync(String key, Codec codec, RedisCommand<T> evalCommandType, String script, List<Object> keys, Object... params) {
         CommandBatchService executorService = createCommandBatchService();
+        // 执行加锁逻辑
         RFuture<T> result = executorService.evalWriteAsync(key, codec, evalCommandType, script, keys, params);
         if (!(commandExecutor instanceof CommandBatchService)) {
             executorService.executeAsync();
@@ -351,6 +355,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         return result;
     }
 
+    // redis上的锁是hset结构，hset的name是anyLock；值=》key：随机字符串（uuid+线程id），value是数字1（2等）；过期时间：3000ms
     <T> RFuture<T> tryLockInnerAsync(long leaseTime, TimeUnit unit, long threadId, RedisStrictCommand<T> command) {
         internalLockLeaseTime = unit.toMillis(leaseTime);
 

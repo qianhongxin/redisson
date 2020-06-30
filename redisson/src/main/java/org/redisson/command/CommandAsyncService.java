@@ -350,9 +350,13 @@ public class CommandAsyncService implements CommandAsyncExecutor {
         return new RedisException("Unexpected exception while processing command", future.cause());
     }
 
+    // 返回key要插入的redis集群中的某个节点
     private NodeSource getNodeSource(String key) {
+        // 计算key对应的hash槽，redis cluster的默认slot数量是16384个平均分布在各个redis实例上，如果有3个实例则每个分担5000多个
         int slot = connectionManager.calcSlot(key);
+        // 根据slot的编号获取对应的redis实例
         MasterSlaveEntry entry = connectionManager.getEntry(slot);
+        // 封装一个redis实例返回
         return new NodeSource(entry, slot);
     }
 
@@ -421,8 +425,19 @@ public class CommandAsyncService implements CommandAsyncExecutor {
 
     @Override
     public <T, R> RFuture<R> evalWriteAsync(String key, Codec codec, RedisCommand<T> evalCommandType, String script, List<Object> keys, Object... params) {
+        // 获取要设置的redis节点
         NodeSource source = getNodeSource(key);
-        return evalAsync(source, false, codec, evalCommandType, script, keys, params);
+        return evalAsync(
+                source,
+                false,
+                codec,
+                evalCommandType,
+                // 传进来的lua脚本
+                script,
+                // script的keys[1]
+                keys,
+                // 参数，代表的是argv[1], argv[2]。比如 uuid+线程id，30s过期时间
+                params);
     }
 
     public <T, R> RFuture<R> evalWriteAsync(MasterSlaveEntry entry, Codec codec, RedisCommand<T> evalCommandType, String script, List<Object> keys, Object... params) {
@@ -527,7 +542,8 @@ public class CommandAsyncService implements CommandAsyncExecutor {
         }
         return result.toArray();
     }
-    
+
+    // 和redis server通信的逻辑，将加锁逻辑在nodeSource上执行
     private <T, R> RFuture<R> evalAsync(NodeSource nodeSource, boolean readOnlyMode, Codec codec, RedisCommand<T> evalCommandType, String script, List<Object> keys, Object... params) {
         if (isEvalCacheActive() && evalCommandType.getName().equals("EVAL")) {
             RPromise<R> mainPromise = new RedissonPromise<R>();
@@ -537,6 +553,7 @@ public class CommandAsyncService implements CommandAsyncExecutor {
             RPromise<R> promise = new RedissonPromise<R>();
             String sha1 = calcSHA(script);
             RedisCommand cmd = new RedisCommand(evalCommandType, "EVALSHA");
+            // 封装参数
             List<Object> args = new ArrayList<Object>(2 + keys.size() + params.length);
             args.add(sha1);
             args.add(keys.size());
