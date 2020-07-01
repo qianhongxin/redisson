@@ -440,6 +440,7 @@ public class CommandAsyncService implements CommandAsyncExecutor {
 
     @Override
     public <T, R> RFuture<R> evalWriteAsync(String key, Codec codec, RedisCommand<T> evalCommandType, String script, List<Object> keys, Object... params) {
+        // 根据key定位待操作的redis实例
         NodeSource source = getNodeSource(key);
         return evalAsync(source, false, codec, evalCommandType, script, keys, params);
     }
@@ -489,6 +490,7 @@ public class CommandAsyncService implements CommandAsyncExecutor {
 
     private <T, R> RFuture<R> evalAsync(NodeSource nodeSource, boolean readOnlyMode, Codec codec, RedisCommand<T> evalCommandType, String script, List<Object> keys, Object... params) {
         RPromise<R> mainPromise = createPromise();
+        // lua脚本需要的参数，即KEYS[1], ARGV[2], ARGV[1]
         List<Object> args = new ArrayList<Object>(2 + keys.size() + params.length);
         args.add(script);
         args.add(keys.size());
