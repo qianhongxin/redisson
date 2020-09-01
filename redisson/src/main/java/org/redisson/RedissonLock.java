@@ -160,6 +160,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
     }
 
     // 支持过期时间但不支持中断的加锁
+    // 支持设置续约时间，如果设置了不是-1就不会启动看门狗
     @Override
     public void lock(long leaseTime, TimeUnit unit) {
         try {
@@ -255,8 +256,18 @@ public class RedissonLock extends RedissonExpirable implements RLock {
     // 只做一次获取锁的操作，不论成功或失败直接返回
     private RFuture<Boolean> tryAcquireOnceAsync(long leaseTime, TimeUnit unit, long threadId) {
         if (leaseTime != -1) {
+            // leaseTime：锁的过期时间
+            // 如果走这里，说明看门狗就不会生效，所以注意调用的方法。比如调用tryAcquireOnceAsync的方法传入的leaseTime不是-1，则这里就加完锁直接返回了，就不会启动看门狗了
+
+            // 如果你自己指定了一个leaseTime，就会直接执行lua脚本去加锁，加完锁的结果就直接返回了，并不会对那个future加一个监听器（看门狗）以及执行定时调度任务
+            // 去刷新key的生存周期，因为你已经指定了leaseTime以后，就意味着你需要的是这个key最多存在10秒钟，必须被删除
+
+            // 也就是说，人家在加锁的时候就设定好了，我们的锁key最多就只能存活10秒钟，而且后台没有定时调度的任务不断的去刷新锁key的生存周期
+            // 我们的那个锁到了10秒钟，就会自动被redis给删除，生存时间只能是10秒钟，然后就会自动释放掉了，别的客户端就可以加锁了，但是在10秒之内，
+            // 其实你也可以自己去手动释放锁
             return tryLockInnerAsync(leaseTime, unit, threadId, RedisCommands.EVAL_NULL_BOOLEAN);
         }
+        // 启动看门狗续约，默认过期时间是30s，就定时30/3=10s来续约
         RFuture<Boolean> ttlRemainingFuture = tryLockInnerAsync(commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout(), TimeUnit.MILLISECONDS, threadId, RedisCommands.EVAL_NULL_BOOLEAN);
         ttlRemainingFuture.onComplete((ttlRemaining, e) -> {
             if (e != null) {
@@ -277,6 +288,14 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         // 条件成立，说明我们传的leaseTime不为空
         if (leaseTime != -1) {
             // leaseTime：锁的过期时间
+            // 如果走这里，说明看门狗就不会生效，所以注意调用的方法。比如调用tryAcquireAsync的方法传入的leaseTime不是-1，则这里就加完锁直接返回了，就不会启动看门狗了
+
+            // 如果你自己指定了一个leaseTime，就会直接执行lua脚本去加锁，加完锁的结果就直接返回了，并不会对那个future加一个监听器（看门狗）以及执行定时调度任务
+            // 去刷新key的生存周期，因为你已经指定了leaseTime以后，就意味着你需要的是这个key最多存在10秒钟，必须被删除
+
+            // 也就是说，人家在加锁的时候就设定好了，我们的锁key最多就只能存活10秒钟，而且后台没有定时调度的任务不断的去刷新锁key的生存周期
+            // 我们的那个锁到了10秒钟，就会自动被redis给删除，生存时间只能是10秒钟，然后就会自动释放掉了，别的客户端就可以加锁了，但是在10秒之内，
+            // 其实你也可以自己去手动释放锁
             return tryLockInnerAsync(leaseTime, unit, threadId, RedisCommands.EVAL_LONG);
         }
         // commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout()  默认释放锁时间，默认30秒（看门狗也是30s释放）
@@ -300,6 +319,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
     // 和lock不同的是，这里是做一次获取锁的逻辑，获取失败不再获取，也不等待
     @Override
     public boolean tryLock() {
+        // 利用get，将异步转同步，即等待结果
         return get(tryLockAsync());
     }
 
@@ -511,6 +531,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         return RedissonPromise.newSucceededFuture(null);
     }
 
+    // 支持获取锁超时，支持设置锁过期时间，超时自动释放（如果看门狗没设置），leaseTime不传默认是30s
     @Override
     public boolean tryLock(long waitTime, long leaseTime, TimeUnit unit) throws InterruptedException {
         long time = unit.toMillis(waitTime);
@@ -521,13 +542,17 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         if (ttl == null) {
             return true;
         }
-        
+
+        // 将time减去耗时
         time -= System.currentTimeMillis() - current;
+        // time小于等于0成立，说明超时了，加锁失败，直接返回false
         if (time <= 0) {
             acquireFailed(threadId);
             return false;
         }
-        
+
+
+        // 这边在等待一些时间，基于pub/sub做一些事情
         current = System.currentTimeMillis();
         RFuture<RedissonLockEntry> subscribeFuture = subscribe(threadId);
         if (!subscribeFuture.await(time, TimeUnit.MILLISECONDS)) {
@@ -543,12 +568,17 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         }
 
         try {
+            // time再次减去耗时
             time -= System.currentTimeMillis() - current;
             if (time <= 0) {
+                // 加锁失败
                 acquireFailed(threadId);
                 return false;
             }
-        
+
+            // 接下来进入死循环，不断的尝试获取锁、等待，每次time都不断的减去尝试获取锁的耗时，
+            // 以及等待的耗时，然后如果说在time范围内，获取到了锁，就会返回true，如果始终无法
+            // 获取到锁的话，那么就会在time指定的最大时间之后，就返回一个false
             while (true) {
                 long currentTime = System.currentTimeMillis();
                 ttl = tryAcquire(leaseTime, unit, threadId);
@@ -591,6 +621,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         pubSub.unsubscribe(future.getNow(), getEntryName(), getChannelName());
     }
 
+    // 同步获取锁，只获取一次，获取成功时30s后自动释放
     @Override
     public boolean tryLock(long waitTime, TimeUnit unit) throws InterruptedException {
         return tryLock(waitTime, -1, unit);
@@ -880,6 +911,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         });
     }
 
+    // 异步获取一次锁
     @Override
     public RFuture<Boolean> tryLockAsync() {
         return tryLockAsync(Thread.currentThread().getId());
