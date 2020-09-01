@@ -419,12 +419,18 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         return result;
     }
 
-    // redis上的锁是hset结构，hset的name是anyLock；值=》key：随机字符串（uuid+线程id），value是数字1（2等）；过期时间：3000ms
+    // redis上的锁是hset结构，hset的name是我们设置的name，即getName()值；值=》key：随机字符串（uuid+线程id），value是数字1（2等）；过期时间：3000ms
     // keys是：Collections.singletonList(getName())
     // params是：internalLockLeaseTime 和 getLockName(threadId)
     <T> RFuture<T> tryLockInnerAsync(long leaseTime, TimeUnit unit, long threadId, RedisStrictCommand<T> command) {
-        //
+        // 锁过期时间
         internalLockLeaseTime = unit.toMillis(leaseTime);
+
+        //-------参数解释如下-------
+        // KEYS[1]是 getName()，我们在getLock（name）时指定的name值
+        // ARGV[1]是 internalLockLeaseTime
+        // ARGV[2]是 getLockName(threadId)
+
 
         // 执行lua脚本，针对redis加锁的一段命令。redis单线程执行命令的，所以执行lua是原子的
         // 如果KEYS[1]不存在
@@ -442,12 +448,14 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         // 这里既是可重入锁的概念了，表示可重入锁
         //"redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
         // 再次将KEYS[1]的有效期设为ARGV[1]
-        // 整个anyLock锁的生存周期重新刷新为ARGV[1]比如30000毫秒，pexpire anyLock 30000
+        // 整个KEYS[1]的生存周期重新刷新为ARGV[1]比如30000毫秒，pexpire KEYS[1] 30000
         //"redis.call('pexpire', KEYS[1], ARGV[1]); " +
         //"return nil; " +
         //"end; " +
 
         // 上面两个if都不成功，走这里即返回KEYS[1]剩余存活时间
+        // 如果上面两个if都不执行，则执行这个pttl指令，返回KEYS[1]的剩余存活时间，单位是ms。当前lua脚本执行完后就返回这个pttl执行结果
+        // 这个时候返回的不是null，因为上面两个if判断，锁都不存在，也就是加锁失败（说明是别的执行体想过来加锁），调用时feture.getNow()就不是null，看门狗就不会继续下去了。见258行
         //"return redis.call('pttl', KEYS[1]);
 
 
@@ -457,18 +465,17 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         // 走了第三个return，说明加锁失败，返回的是当前key的剩余存活时间
         // 总结：当前加锁的lua脚本如果返回null，说明加锁/可重入加锁成功。返回剩余时间，说明加锁失败，根据调用需要是否执行等待逻辑
 
-        //-------以上参数解释如下-------
-        // 跟进去发现，KEYS[1]是Collections.singletonList(getName())
-        // ARGV[1]是internalLockLeaseTime，ARGV[2]是getLockName(threadId)
 
-        // getName()获取到的name是我们创建锁时传入的name，比如orderId:1:lock等
-
+        //-------一些说明-------
         // 这里锁的数据结构用的哈希结构，key就是我们获取锁时指定的name。value是个k-v结构，k是redisson生成的，利用uuid+线程id生成，v是整数 从1开始自增来支持可重入
         // 这里可重入锁加锁为啥要用lua脚本，而不是简单的set nx px命令？
              // 减少网络开销：本来多次网络请求的操作，可以用一个请求完成，原先多次请求的逻辑放在redis服务器上完成。使用脚本，减少了网络往返时延
              // 原子操作：Redis会将整个脚本作为一个整体执行，中间不会被其他命令插入
             //  复用：客户端发送的脚本会永久存储在Redis中，意味着其他客户端可以复用这一脚本而不需要使用代码完成同样的逻辑
              // 主要原因：简单的set nx px命令并不支持可重入锁，这里利用哈希结构，实现k是随机值来达到set nx px命令的效果，然后v是数字来支持可重入的效果
+             //         还有就是这个哈希结构的key是getName()，任意客户端加任意锁在redis中都是存储在这个对应的getName()为名字的哈希结构中，
+             //         value就是各个线程加的锁即k-v结构，k是随机值即getLockName(threadId)防止误删除，v是整数。redis用哈希结构管理同一个name的所有执行体的加锁，而哈希不支持
+             //         多个值的set nx px的效果，只能用lua来实现多个指令的原子性
         return evalWriteAsync(getName(), LongCodec.INSTANCE, command,
                 "if (redis.call('exists', KEYS[1]) == 0) then " +
                         "redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
@@ -686,12 +693,14 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         return unlockAsync(threadId);
     }
 
+    // 这里是手动调用释放锁逻辑
+    // 如果宕机来，宕机自动释放锁，这个锁对应的就是redis里的一个key，如果这个机器宕机了，
+    // 对这个key不断的刷新其生存周期的后台定时调度的任务就没了，redis里的key，自动就会在
+    // 最多leasetime秒内就过期删除
     protected RFuture<Boolean> unlockInnerAsync(long threadId) {
-        // lua脚本的参数解释
-        // KEYS[1]是Arrays.asList(getName(), getChannelName())
-        // KEYS[1]
 
-        // 如果KEYS[1]存在，且ARGV[3]的值为0，即表示锁已经被释放，则直接返回null，表示锁已经释放成功
+
+
         // "if (redis.call('hexists', KEYS[1], ARGV[3]) == 0) then " +
         // "return nil;" +
         // "end; " +
@@ -702,6 +711,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         // "return 0; " +
         // "else " +
         // "redis.call('del', KEYS[1]); " +
+
         // "redis.call('publish', KEYS[2], ARGV[1]); " +
         // "return 1; " +
         // "end; " +
@@ -709,18 +719,36 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         // "return nil;"
 
         return evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
+                // lua脚本的参数解释
+                // KEYS[1]: getName()，即我们设置的锁名字
+                // KEYS[2]: 发布订阅的key，即getChannelName()，即redisson_lock__channel_我们设置的锁名字
+                // ARGV[1]: LockPubSub.UNLOCK_MESSAGE
+                // ARGV[2]: internalLockLeaseTime
+                // ARGV[3]: getLockName(threadId)
+
+                // 如果KEYS[1]存在，且ARGV[3]的值为0，即表示锁已经被释放，则直接返回null，表示锁已经释放成功
                 "if (redis.call('hexists', KEYS[1], ARGV[3]) == 0) then " +
+                        // 如果成立返回null，标示没加过锁
                         "return nil;" +
                         "end; " +
+
+                        // 否则将锁的值加上-1，即可重入的扣减1
                         "local counter = redis.call('hincrby', KEYS[1], ARGV[3], -1); " +
+                        // 如果减去1后还大于0，则刷新锁的过期时间，然后返回0
                         "if (counter > 0) then " +
                         "redis.call('pexpire', KEYS[1], ARGV[2]); " +
                         "return 0; " +
                         "else " +
+                        // 执行到这里说明counter == 0，执行删除锁指令，即del
                         "redis.call('del', KEYS[1]); " +
+                        // 向key为getChannelName() （redisson_lock__channel_我们设置的锁名字）中发布一个消息，然后订阅这个key的客户端可以收到redis推给他的消息
+                        // 这个是redis的发布订阅模型即pub/sub
                         "redis.call('publish', KEYS[2], ARGV[1]); " +
+                        // 返回1，标示删除成功
                         "return 1; " +
                         "end; " +
+
+                        // 兜底的return策略，不会执行到这里的
                         "return nil;",
                 Arrays.asList(getName(), getChannelName()), LockPubSub.UNLOCK_MESSAGE, internalLockLeaseTime, getLockName(threadId));
     }
