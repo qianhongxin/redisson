@@ -425,7 +425,7 @@ public class CommandAsyncService implements CommandAsyncExecutor {
 
     @Override
     public <T, R> RFuture<R> evalWriteAsync(String key, Codec codec, RedisCommand<T> evalCommandType, String script, List<Object> keys, Object... params) {
-        // 获取要设置的redis节点
+        // 获取要前往加锁的redis节点
         NodeSource source = getNodeSource(key);
         return evalAsync(
                 source,
@@ -436,7 +436,7 @@ public class CommandAsyncService implements CommandAsyncExecutor {
                 script,
                 // script的keys[1]
                 keys,
-                // 参数，代表的是argv[1], argv[2]。比如 uuid+线程id，30s过期时间
+                // 参数，以加锁为例：代表的是argv[1], argv[2]。比如 uuid+线程id，30s过期时间
                 params);
     }
 

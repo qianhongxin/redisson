@@ -38,6 +38,7 @@ import org.redisson.pubsub.LockPubSub;
  * @author Nikita Koksharov
  *
  */
+// 可重入公平加锁
 public class RedissonFairLock extends RedissonLock implements RLock {
 
     private final long threadWaitTime;
@@ -95,54 +96,88 @@ public class RedissonFairLock extends RedissonLock implements RLock {
 
     @Override
     <T> RFuture<T> tryLockInnerAsync(long leaseTime, TimeUnit unit, long threadId, RedisStrictCommand<T> command) {
+        // 过期时间转换
         internalLockLeaseTime = unit.toMillis(leaseTime);
 
         long currentTime = System.currentTimeMillis();
         if (command == RedisCommands.EVAL_NULL_BOOLEAN) {
             return evalWriteAsync(getName(), LongCodec.INSTANCE, command,
+                    // 使用的参数解释:
+                    // KEYS = Arrays.<Object>asList(getName(), threadsQueueName, timeoutSetName)
+                    // KEYS[1] = getName() = 锁的名字，“anyLock”, 是我们传入的
+                    // KEYS[2] = threadsQueueName = redisson_lock_queue:{anyLock}，基于redis的数据结构实现的一个队列
+                    // KEYS[3] = timeoutSetName = redisson_lock_timeout:{anyLock}，基于redis的数据结构实现的一个Set数据集合，有序集合，可以自动按照你给每个数据指定的一个分数（score）来进行排序
+
+                    // ARGV[1] = internalLockLeaseTime (30000毫秒)
+                    // ARGV[2] = getLockName(threadId) (UUID:threadId)
+                    // ARGV[3] = currentTime(当前时间（10:00:00）) + threadWaitTime(5000毫秒) = (10:00:05)
+                    // ARGV[4] = currentTime(当前时间（10:00:00）)
+
+
                     // remove stale threads
+                    // 自旋
                     "while true do " +
+                            // 获取队列第一个元素值
                         "local firstThreadId2 = redis.call('lindex', KEYS[2], 0);" +
+                            // 如果第一个值是false，表示队列为空，退出循环
+                            // 如果为true，跳过该if，执行后面的
                         "if firstThreadId2 == false then " +
                             "break;" +
                         "end;" +
+                            // 获取firstThreadId2在zset集合中的得分，即zscore值。是个时间戳
                         "local timeout = tonumber(redis.call('zscore', KEYS[3], firstThreadId2));" +
+                            // 如果timeout小于等于  currentTime(当前时间（10:00:00）) + threadWaitTime(5000毫秒)
                         "if timeout <= tonumber(ARGV[3]) then " +
                             // remove the item from the queue and timeout set
                             // NOTE we do not alter any other timeout
+                            // todo
                             "redis.call('zrem', KEYS[3], firstThreadId2);" +
                             "redis.call('lpop', KEYS[2]);" +
                         "else " +
+                            // 退出循环
                             "break;" +
                         "end;" +
-                    "end;" +
+                    "end;" + // 这个end是while循环的结束标记
 
+                            // 条件1成立：说明看我们指定的锁的name不存在
+                            // 条件2成立：表示等待队列为空或者第一个元素为当前加锁线程
+                                // 条件2.1成立：表示我们等待队列不存在
+                                // 条件2.2成立：表示等待队列存在，且队列的第一个元素是当前要加锁的线程
                     "if (redis.call('exists', KEYS[1]) == 0) " +
                         "and ((redis.call('exists', KEYS[2]) == 0) " +
                             "or (redis.call('lindex', KEYS[2], 0) == ARGV[2])) then " +
+                            // 直接将等待队列的左边第一个元素出队
                         "redis.call('lpop', KEYS[2]);" +
+                            // 删除zset中对应的加锁线程，因为这个线程已经要去获取锁了
                         "redis.call('zrem', KEYS[3], ARGV[2]);" +
 
                         // decrease timeouts for all waiting in the queue
+                            // todo
                         "local keys = redis.call('zrange', KEYS[3], 0, -1);" +
                         "for i = 1, #keys, 1 do " +
                             "redis.call('zincrby', KEYS[3], -tonumber(ARGV[4]), keys[i]);" +
                         "end;" +
 
+                            // 熟悉的加锁逻辑，并设置过期时间
                         "redis.call('hset', KEYS[1], ARGV[2], 1);" +
                         "redis.call('pexpire', KEYS[1], ARGV[1]);" +
+                            // 加锁成功，返回null
                         "return nil;" +
                     "end;" +
+
+                            // 熟悉的可重入加锁逻辑，并刷新过期时间
                     "if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " +
                         "redis.call('hincrby', KEYS[1], ARGV[2], 1);" +
                         "redis.call('pexpire', KEYS[1], ARGV[1]);" +
+                            // 可重入加锁成功返回null
                         "return nil;" +
                     "end;" +
+
+                            // 加锁失败，返回1
                     "return 1;",
                     Arrays.<Object>asList(getName(), threadsQueueName, timeoutSetName),
                     internalLockLeaseTime, getLockName(threadId), currentTime, threadWaitTime);
         }
-
         if (command == RedisCommands.EVAL_LONG) {
             return evalWriteAsync(getName(), LongCodec.INSTANCE, command,
                     // remove stale threads

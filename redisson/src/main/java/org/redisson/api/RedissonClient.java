@@ -32,6 +32,8 @@ import java.util.concurrent.TimeUnit;
  * @author Nikita Koksharov
  *
  */
+// 使用redisson的主要入口
+    // 比如锁的使用等
 public interface RedissonClient {
 
     /**

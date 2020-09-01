@@ -343,6 +343,9 @@ public class Redisson implements RedissonClient {
 
     @Override
     public RLock getLock(String name) {
+        // 传入命令执行器和name
+        // connectionManager.getCommandExecutor()拿到的CommandExecutor
+        // ，里面一定是封装了一个跟redis之间进行通信的一个Cconnection连接对象，CommandExecutor，命令执行器，封装了一个redis连接的命令执行器，可以执行一些set、get redis的一些操作，用来执行底层的redis命令的
         return new RedissonLock(connectionManager.getCommandExecutor(), name);
     }
     
