@@ -36,6 +36,8 @@ import org.redisson.pubsub.LockPubSub;
  */
 // 写锁,继承的RedissonLock即非公平
 // 研究分布式锁的源码，一般来说不需要画图，就是之前最初的那个图就够了，后面的锁都是基于之前的最早最基础的那个锁的技术框架来实现的，然后redis的锁又是基于java的锁接口扩展的，后面的直接分析lua脚本
+
+// 使用时是通过RedissonReadWriteLock使用，读写锁的name一样即KEYS[1]一样，共享一个锁数据结构
 public class RedissonWriteLock extends RedissonLock implements RLock {
 
     protected RedissonWriteLock(CommandAsyncExecutor commandExecutor, String name) {

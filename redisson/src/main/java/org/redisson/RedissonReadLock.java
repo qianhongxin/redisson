@@ -35,6 +35,7 @@ import org.redisson.pubsub.LockPubSub;
  *
  */
 // 读锁,继承的RedissonLock即非公平
+// 使用时是通过RedissonReadWriteLock使用，读写锁的name一样即KEYS[1]一样，共享一个锁数据结构
 public class RedissonReadLock extends RedissonLock implements RLock {
 
     public RedissonReadLock(CommandAsyncExecutor commandExecutor, String name) {
