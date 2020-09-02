@@ -58,6 +58,8 @@ public class RedissonWriteLock extends RedissonLock implements RLock {
         internalLockLeaseTime = unit.toMillis(leaseTime);
 
         return evalWriteAsync(getName(), LongCodec.INSTANCE, command,
+                            // 注意读锁和写锁共用一个哈希结构的key的。和java一样，读写锁共用一个state值等
+
                             // KEYS[1]：getName()
                             // ARGV[1]: internalLockLeaseTime
                             // ARGV[2]: getLockName(threadId)

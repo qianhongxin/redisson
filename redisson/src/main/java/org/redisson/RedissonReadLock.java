@@ -60,15 +60,30 @@ public class RedissonReadLock extends RedissonLock implements RLock {
         internalLockLeaseTime = unit.toMillis(leaseTime);
 
         return evalWriteAsync(getName(), LongCodec.INSTANCE, command,
+                                // 注意读锁和写锁共用一个哈希结构的key的。和java一样，读写锁共用一个state值等
+
+                                // KEYS[1]：getName() hash结构的key，即我们设置的锁名称
+                                // KEYS[2]：getReadWriteTimeoutNamePrefix(threadId)
+                                // ARGV[1]：internalLockLeaseTime
+                                // ARGV[2]：getLockName(threadId)
+                                // ARGV[3]：getWriteLockName(threadId)
+
+                                // 获取锁KEYS[1]中mode字段的值
                                 "local mode = redis.call('hget', KEYS[1], 'mode'); " +
+                                        // 条件成立：说明mode没有设置，即为nil。nil==false成立。说明此时还没有客户端来加过锁
                                 "if (mode == false) then " +
+                                        // 设置锁状态mode值为读锁，即read
                                   "redis.call('hset', KEYS[1], 'mode', 'read'); " +
+                                        // 将KEYS[1]的加锁客户端的v设置为1，表示加锁了
                                   "redis.call('hset', KEYS[1], ARGV[2], 1); " +
+                                        // lua的两个点语法“..”是指将前后两个字符串连接在一起
+                                        // fixme
                                   "redis.call('set', KEYS[2] .. ':1', 1); " +
                                   "redis.call('pexpire', KEYS[2] .. ':1', ARGV[1]); " +
                                   "redis.call('pexpire', KEYS[1], ARGV[1]); " +
                                   "return nil; " +
                                 "end; " +
+
                                 "if (mode == 'read') or (mode == 'write' and redis.call('hexists', KEYS[1], ARGV[3]) == 1) then " +
                                   "local ind = redis.call('hincrby', KEYS[1], ARGV[2], 1); " + 
                                   "local key = KEYS[2] .. ':' .. ind;" +
@@ -78,6 +93,7 @@ public class RedissonReadLock extends RedissonLock implements RLock {
                                   "redis.call('pexpire', KEYS[1], math.max(remainTime, ARGV[1])); " +
                                   "return nil; " +
                                 "end;" +
+
                                 "return redis.call('pttl', KEYS[1]);",
                         Arrays.<Object>asList(getName(), getReadWriteTimeoutNamePrefix(threadId)), 
                         internalLockLeaseTime, getLockName(threadId), getWriteLockName(threadId));
