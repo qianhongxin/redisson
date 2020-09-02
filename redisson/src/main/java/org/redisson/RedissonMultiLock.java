@@ -38,6 +38,11 @@ import org.redisson.misc.TransferListener;
  * @author Nikita Koksharov
  *
  */
+//MultiLock，redisson分布式锁这块是支持MultiLock这个机制的，可以将多个锁合并为一个大锁，对一个大锁进行统一的申请加锁以及释放锁
+//一次性锁定多个资源，再去处理一些事情，然后事后一次性释放所有的资源对应的锁
+//在项目里使用的时候，很多时候一次性要锁定多个资源，比如说锁掉一个库存，锁掉一个订单，锁掉一个积分，一次性锁掉多个资源，多个资源都不让别人随意修改，然后你再一次性更新多个资源，释放多个锁
+//MultiLock的源码，我们初步看一下，其实也不过是没什么特别的，就是包裹了多个RedissonLock，底层就是尝试依次对每一个锁都要成功加锁，如果所有的锁都成功加锁了之后，那么就认为MultiLock就成功加锁了
+//释放锁，依次去释放每一把锁就可以
 public class RedissonMultiLock implements RLock {
 
     class LockState {
@@ -189,7 +194,8 @@ public class RedissonMultiLock implements RLock {
         }
         
     }
-    
+
+    // 持有着多个RLock引用
     final List<RLock> locks = new ArrayList<>();
     
     /**
@@ -277,8 +283,11 @@ public class RedissonMultiLock implements RLock {
         long baseWaitTime = locks.size() * 1500;
         long waitTime = -1;
         if (leaseTime == -1) {
+            // 如果leaseTime=-1，即启动看门狗续约。这里设置waitTime为locks.size() * 1500
             waitTime = baseWaitTime;
         } else {
+            // 走到这，说明leaseTime不是-1.加锁后不启动看门狗续约
+            // 转换续约时间，并计算等待时间
             leaseTime = unit.toMillis(leaseTime);
             waitTime = leaseTime;
             if (waitTime <= 2000) {
@@ -361,6 +370,7 @@ public class RedissonMultiLock implements RLock {
             if (waitTime == -1) {
                 newLeaseTime = unit.toMillis(leaseTime);
             } else {
+                // 续约时间扩大2倍
                 newLeaseTime = unit.toMillis(waitTime)*2;
             }
         }
@@ -370,10 +380,13 @@ public class RedissonMultiLock implements RLock {
         if (waitTime != -1) {
             remainTime = unit.toMillis(waitTime);
         }
+        // 计算一个加锁等待时间，其实就是remainTime
         long lockWaitTime = calcLockWaitTime(remainTime);
-        
+
+        // failedLocksLimit()返回的是0，即不允许任意一把锁加锁失败
         int failedLocksLimit = failedLocksLimit();
         List<RLock> acquiredLocks = new ArrayList<>(locks.size());
+        // 遍历locks
         for (ListIterator<RLock> iterator = locks.listIterator(); iterator.hasNext();) {
             RLock lock = iterator.next();
             boolean lockAcquired;
@@ -381,7 +394,9 @@ public class RedissonMultiLock implements RLock {
                 if (waitTime == -1 && leaseTime == -1) {
                     lockAcquired = lock.tryLock();
                 } else {
+                    // 拿到一个最小的等待时间
                     long awaitTime = Math.min(lockWaitTime, remainTime);
+                    // 支持超时的加锁
                     lockAcquired = lock.tryLock(awaitTime, newLeaseTime, TimeUnit.MILLISECONDS);
                 }
             } catch (RedisResponseTimeoutException e) {
@@ -392,20 +407,29 @@ public class RedissonMultiLock implements RLock {
             }
             
             if (lockAcquired) {
+                // 加锁成功，将锁放入成功加锁集合中
                 acquiredLocks.add(lock);
             } else {
+                // 走到这说明当前这把锁加锁失败了。
+
+                // 条件成立：说明当前加锁失败的数量和允许失败的数量一样。退出循环
                 if (locks.size() - acquiredLocks.size() == failedLocksLimit()) {
                     break;
                 }
 
+                // 条件成立：不允许任意一把锁加锁失败
                 if (failedLocksLimit == 0) {
+                    // 因为当前这把锁加锁失败了，所以将已经成功加的锁都释放掉
                     unlockInner(acquiredLocks);
                     if (waitTime == -1) {
+                        // 如果不等待，直接返回false，加锁失败
                         return false;
                     }
                     failedLocksLimit = failedLocksLimit();
+                    // 清空成功锁集合
                     acquiredLocks.clear();
                     // reset iterator
+                    // 重置迭代器
                     while (iterator.hasPrevious()) {
                         iterator.previous();
                     }

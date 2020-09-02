@@ -34,6 +34,7 @@ import org.redisson.pubsub.LockPubSub;
  * @author Nikita Koksharov
  *
  */
+// 读锁,继承的RedissonLock即非公平
 public class RedissonReadLock extends RedissonLock implements RLock {
 
     public RedissonReadLock(CommandAsyncExecutor commandExecutor, String name) {
@@ -52,7 +53,8 @@ public class RedissonReadLock extends RedissonLock implements RLock {
     String getReadWriteTimeoutNamePrefix(long threadId) {
         return suffixName(getName(), getLockName(threadId)) + ":rwlock_timeout"; 
     }
-    
+
+    // 异步加读锁lua脚本逻辑
     @Override
     <T> RFuture<T> tryLockInnerAsync(long leaseTime, TimeUnit unit, long threadId, RedisStrictCommand<T> command) {
         internalLockLeaseTime = unit.toMillis(leaseTime);
@@ -81,6 +83,7 @@ public class RedissonReadLock extends RedissonLock implements RLock {
                         internalLockLeaseTime, getLockName(threadId), getWriteLockName(threadId));
     }
 
+    // 异步释放读锁lua脚本逻辑
     @Override
     protected RFuture<Boolean> unlockInnerAsync(long threadId) {
         String timeoutPrefix = getReadWriteTimeoutNamePrefix(threadId);
@@ -136,7 +139,8 @@ public class RedissonReadLock extends RedissonLock implements RLock {
     protected String getKeyPrefix(long threadId, String timeoutPrefix) {
         return timeoutPrefix.split(":" + getLockName(threadId))[0];
     }
-    
+
+    // 看门狗异步给读锁续期的lua脚本逻辑
     @Override
     protected RFuture<Boolean> renewExpirationAsync(long threadId) {
         String timeoutPrefix = getReadWriteTimeoutNamePrefix(threadId);
@@ -171,6 +175,7 @@ public class RedissonReadLock extends RedissonLock implements RLock {
         throw new UnsupportedOperationException();
     }
 
+    // 强制删除锁，直接删除，不论是否有客户端持有锁
     @Override
     public RFuture<Boolean> forceUnlockAsync() {
         cancelExpirationRenewal(null);

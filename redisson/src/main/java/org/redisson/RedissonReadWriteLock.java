@@ -34,6 +34,7 @@ import org.redisson.command.CommandAsyncExecutor;
  * @author Nikita Koksharov
  *
  */
+// 读写锁的基本封装实现
 public class RedissonReadWriteLock extends RedissonExpirable implements RReadWriteLock {
 
     public RedissonReadWriteLock(CommandAsyncExecutor commandExecutor, String name) {
