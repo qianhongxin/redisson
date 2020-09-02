@@ -93,7 +93,7 @@ public class RedissonWriteLock extends RedissonLock implements RLock {
                                   "end; " +
                                 "end;" +
 
-                                    // 走到这，说明KEYS[1]锁已经被别的客户端持有，当前客户端加不了写锁，只能返回KEYS[1]的剩余过期时间回去
+                                    // 走到这，说明KEYS[1]锁已经被别的客户端持有，当前客户端加不了写/读锁，只能返回KEYS[1]的剩余过期时间回去
                                 "return redis.call('pttl', KEYS[1]);",
                         Arrays.<Object>asList(getName()), 
                         internalLockLeaseTime, getLockName(threadId));

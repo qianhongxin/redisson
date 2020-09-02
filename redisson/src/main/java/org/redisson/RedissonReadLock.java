@@ -84,8 +84,11 @@ public class RedissonReadLock extends RedissonLock implements RLock {
                                   "return nil; " +
                                 "end; " +
 
+                                        // 条件一成立：说明加的是读锁
+                                        // 条件二成立：说明加的是写锁，并且加写锁的客户端就是当前过来的客户端
                                 "if (mode == 'read') or (mode == 'write' and redis.call('hexists', KEYS[1], ARGV[3]) == 1) then " +
-                                  "local ind = redis.call('hincrby', KEYS[1], ARGV[2], 1); " + 
+                                        // 如果ARGV[2]不存在就将ARGV[2]放入KEYS[1]中，存在就自增1
+                                  "local ind = redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
                                   "local key = KEYS[2] .. ':' .. ind;" +
                                   "redis.call('set', key, 1); " +
                                   "redis.call('pexpire', key, ARGV[1]); " +
