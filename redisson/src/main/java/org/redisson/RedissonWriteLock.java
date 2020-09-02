@@ -62,7 +62,7 @@ public class RedissonWriteLock extends RedissonLock implements RLock {
 
                             // KEYS[1]：getName()
                             // ARGV[1]: internalLockLeaseTime
-                            // ARGV[2]: getLockName(threadId)
+                            // ARGV[2]: getLockName(threadId) （eg：UUID_01:threadId_01）
 
                             // 获取KEYS[1]中k为mode（锁类型）的值。如果没设置过返回nil，如果有返回对应的值
                             "local mode = redis.call('hget', KEYS[1], 'mode'); " +
