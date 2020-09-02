@@ -78,7 +78,7 @@ public class RedissonWriteLock extends RedissonLock implements RLock {
                                   "return nil; " +
                               "end; " +
 
-                                    // 走到这，说明mode不是空，说明锁KEYS[1]已经有客户端在持有了
+                                    // 走到这，说明mode不是空，说明KEYS[1]写锁已经有客户端在持有了
                               "if (mode == 'write') then " +
                                     // 如果持有KEYS[1]锁的客户端是ARGV[2]对应的客户端，则执行可重入加锁逻辑。
                                   "if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " +
