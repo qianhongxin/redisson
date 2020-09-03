@@ -56,6 +56,7 @@ import java.util.concurrent.locks.Condition;
  * @author Nikita Koksharov
  *
  */
+// 非公平可重入锁，属于独占锁
 // 该类中的是非公平的可重入锁实现，即胡乱的争抢，毫无公平可言。子类有公平锁，读写锁等实现
 public class RedissonLock extends RedissonExpirable implements RLock {
 

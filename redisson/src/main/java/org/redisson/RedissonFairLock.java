@@ -38,8 +38,11 @@ import org.redisson.pubsub.LockPubSub;
  * @author Nikita Koksharov
  *
  */
-// 可重入公平加锁
+// 可重入公平加锁。属于独占锁
 // 和java的锁一样，redis实现的公平锁也要队列等数据结构支撑，操作数据结构的算法都在lua脚本中，不在redisson客户端代码中
+// 注意：java的公平锁是这样的，当线程加锁时，队列有元素，直接入队。当持锁线程释放锁时，会自己唤醒队头元素抢锁。但是redisson是客户端和服务器redis交互
+    //   当客户端请求锁时，如果抢失败，或队列已经有等待客户端，直接入队等待。但是当锁被释放时，队列中等待的客户端需要自己客户端自己的进程向redis请求加锁才会执行公平锁逻辑，所以会有个请求的
+    //    的过程，不向单机的java，直接唤醒对应线程即可。redis的客户端散落在各地，他没有通知，而是让客户端请求的方式实现
 public class RedissonFairLock extends RedissonLock implements RLock {
 
     private final long threadWaitTime;
@@ -111,8 +114,8 @@ public class RedissonFairLock extends RedissonLock implements RLock {
 
                     // ARGV[1] = internalLockLeaseTime (30000毫秒)
                     // ARGV[2] = getLockName(threadId) (UUID:threadId)
-                    // ARGV[3] = currentTime(当前时间（10:00:00）) + threadWaitTime(5000毫秒) = (10:00:05)
-                    // ARGV[4] = currentTime(当前时间（10:00:00）)
+                    // ARGV[3] = currentTime(比如当前时间（10:00:00）) + threadWaitTime(5000毫秒) = (10:00:05)
+                    // ARGV[4] = currentTime(比如当前时间（10:00:00）)
 
 
                     // remove stale threads
@@ -187,18 +190,19 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                     // remove stale threads
                     // 使用的参数解释:
                     // KEYS = Arrays.<Object>asList(getName(), threadsQueueName, timeoutSetName)
-                    // KEYS[1] = getName() = 锁的名字，“anyLock”, 是我们传入的
-                    // KEYS[2] = threadsQueueName = redisson_lock_queue:{name}，基于redis的数据结构实现的一个队列
-                    // KEYS[3] = timeoutSetName = redisson_lock_timeout:{name}，基于redis的数据结构实现的一个Set数据集合，有序集合，可以自动按照你给每个数据指定的一个分数（score）来进行排序
+                    // KEYS[1] = getName() 比如 锁的名字，“anyLock”, 是我们传入的
+                    // KEYS[2] = threadsQueueName 比如 redisson_lock_queue:{anyLock}，基于redis的数据结构实现的一个队列
+                    // KEYS[3] = timeoutSetName 比如 redisson_lock_timeout:{anyLock}，基于redis的数据结构实现的一个Set数据集合，有序集合，可以自动按照你给每个数据指定的一个分数（score）来进行排序
 
-                    // ARGV[1] = internalLockLeaseTime (30000毫秒)
-                    // ARGV[2] = getLockName(threadId) (UUID:threadId)
-                    // ARGV[3] = currentTime(当前时间（10:00:00）) + threadWaitTime(5000毫秒) = (10:00:05)
-                    // ARGV[4] = currentTime(当前时间（10:00:00）)
+                    // ARGV[1] = internalLockLeaseTime (比如 30000毫秒)
+                    // ARGV[2] = getLockName(threadId) (比如 UUID1:threadId1)
+                    // ARGV[3] = currentTime(比如当前时间（10:00:00）) + threadWaitTime(5000毫秒) = (10:00:05)
+                    // ARGV[4] = currentTime(比如当前时间（10:00:00）)
 
                     // 自旋
                     "while true do " +
-                            // 获取等待队列左边第一个元素值即队头，为空返回nil
+                            // 获取等待队列左边第一个元素值即队头，为空返回nil。
+                            // 本质firstThreadId2是ARGV[2]，即UUID1:threadId1这种
                         "local firstThreadId2 = redis.call('lindex', KEYS[2], 0);" +
                             // 如果是空则firstThreadId2是nil，nil==false成立，直接退出循环。
                         "if firstThreadId2 == false then " +
@@ -206,10 +210,10 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                             "break;" +
                         "end;" +
                             // 走到这，说明队列KEYS[2]不是空，获取到的队头元素firstThreadId2曾今因为加锁失败所以在队列KEYS[2]中等待
-                            // redis.call('zscore', KEYS[3], firstThreadId2): 获取redisson_lock_timeout:{name}队列的firstThreadId2的得分，即时间戳值。如果不存在返回nil
+                            // redis.call('zscore', KEYS[3], firstThreadId2): 获取redisson_lock_timeout:{anyLock}队列的firstThreadId2的得分，即时间戳值。如果不存在返回nil
                             // 如果返回nil，则tonumber(nil) 为 0，即timeout为0
                         "local timeout = tonumber(redis.call('zscore', KEYS[3], firstThreadId2));" +
-                            // 如果时间 小于等于 当前时间戳，执行出队逻辑，即从KEYS[3]和KEYS[2]中移除掉 fixme
+                            // 协助 timeout 小于等于 当前时间戳的firstThreadId2做出队逻辑，即从KEYS[3]和KEYS[2]中移除掉 firstThreadId2
                         "if timeout <= tonumber(ARGV[4]) then " +
                             // remove the item from the queue and timeout set
                             // NOTE we do not alter any other timeout
@@ -225,31 +229,31 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                     "end;" + // while循环结束标示
 
                     // check if the lock can be acquired now
-                            // 条件1成立：说明看我们指定的锁的name不存在，即当前还没人加锁
+                            // 条件1成立：说明看我们指定的锁的 anyLock 不存在，即当前还没人加锁
                             // 条件2成立：表示等待队列为空或者第一个元素为当前加锁线程
-                            //      条件2.1成立：表示我们等待队列不存在
-                            //      条件2.2成立：表示等待队列存在，且队列的第一个元素即队头是当前要加锁的线程
+                            //      条件2.1成立：表示我们等待队列redisson_lock_queue:{anyLock}不存在
+                            //      条件2.2成立：表示等待队列redisson_lock_queue:{anyLock}存在，且队列的第一个元素即队头是当前要加锁的线程 即UUID1:threadId1这种
                     "if (redis.call('exists', KEYS[1]) == 0) " +
                         "and ((redis.call('exists', KEYS[2]) == 0) " +
                             "or (redis.call('lindex', KEYS[2], 0) == ARGV[2])) then " +
-
-                        // remove this thread from the queue and timeout set
-                            // 从redisson_lock_queue:{name}出队左边第一个元素，即队头元素出队
+                            // 走到这，说明当前anyLock中还没人加锁,而且对头元素就是当前要加锁的客户端
+                            // remove this thread from the queue and timeout set
+                            // 从redisson_lock_queue:{anyLock}出队左边第一个元素，即队头元素出队。这个元素就是当前请求的客户端即UUID1:threadId1
                         "redis.call('lpop', KEYS[2]);" +
-                            // 从redisson_lock_timeout:{name}删除当前线程
+                            // 从redisson_lock_timeout:{anyLock}删除当前客户端 UUID1:threadId1
                         "redis.call('zrem', KEYS[3], ARGV[2]);" +
 
                         // decrease timeouts for all waiting in the queue
-                            // 获取redisson_lock_timeout:{name}队列的从第一个到最后一个元素。即获取队列的全部元素
+                            // 获取redisson_lock_timeout:{anyLock}队列的从第一个到最后一个元素。即获取队列的全部元素
                         "local keys = redis.call('zrange', KEYS[3], 0, -1);" +
                             // 遍历全部元素
                         "for i = 1, #keys, 1 do " +
-                            // 将队列元素的得分都减去当前时间戳的值 fixme
+                            // 将元素的得分都减去当前时间戳的值 fixme
                             "redis.call('zincrby', KEYS[3], -tonumber(ARGV[3]), keys[i]);" +
                         "end;" +
 
                         // acquire the lock and set the TTL for the lease
-                            // 熟悉的加锁逻辑
+                            // 熟悉的加锁逻辑，给当前客户端加锁，也就是对头的出来的客户端，上面说了。（这就是公平锁）
                         "redis.call('hset', KEYS[1], ARGV[2], 1);" +
                             // 设置锁的过期时间
                         "redis.call('pexpire', KEYS[1], ARGV[1]);" +
@@ -258,7 +262,9 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                     "end;" +
 
                     // check if the lock is already held, and this is a re-entry
-                            // 可重入加锁逻辑
+                            // 走到这，说明236行if判断失败，即anyLock已经有人加锁了；或者anyLock没人加锁，但是等待队列的对头元素不是当前要加锁的客户端
+
+                            // 条件成立：说明anyLock的已经加锁的客户端就是当前请求的客户端，直接进入可重入加锁逻辑
                     "if redis.call('hexists', KEYS[1], ARGV[2]) == 1 then " +
                             // 锁自增1
                         "redis.call('hincrby', KEYS[1], ARGV[2],1);" +
@@ -271,37 +277,45 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                     // the lock cannot be acquired
                     // check if the thread is already in the queue
 
-                    // fixme
+                            // 走到这，说明236行if判断失败，即anyLock已经有人加锁了；或者anyLock没人加锁，但是等待队列的对头元素不是当前要加锁的客户端
+                            // 并且268行if判断失败，即当前持有锁的客户端不是当前请求的客户端
+                            // 从redisson_lock_timeout:{anyLock}中获取当前请求客户端的得分，即等待时间
                     "local timeout = redis.call('zscore', KEYS[3], ARGV[2]);" +
+                            // 条件成立，表示当前请求客户端已经在队列中排队了
                     "if timeout ~= false then " +
                         // the real timeout is the timeout of the prior thread
                         // in the queue, but this is approximately correct, and
                         // avoids having to traverse the queue
+                            // 返回当前客户端剩余过期时间 （因为redisson_lock_timeout:{anyLock}中的score是ARGV[3], 为啥这么算看下面入队的算法）
                         "return timeout - tonumber(ARGV[3]) - tonumber(ARGV[4]);" +
                     "end;" +
 
                     // add the thread to the queue at the end, and set its timeout in the timeout set to the timeout of
                     // the prior thread in the queue (or the timeout of the lock if the queue is empty) plus the
                     // threadWaitTime
-                    // 以下是加锁失败后进入队列排队的逻辑 fixme
-                            // 获取KEYS[2]的最后一个元素的值
+                            // 走到这，说明236行if判断失败，即anyLock已经有人加锁了；或者anyLock没人加锁，但是等待队列的对头元素不是当前要加锁的客户端
+                            // 并且285行if判断失败，即当前请求客户端不在队列中排队，这里需要执行入队逻辑
+
+                            // 以下是加锁失败后进入队列排队的逻辑
+                            // 获取KEYS[2]的最后一个等待客户端
                     "local lastThreadId = redis.call('lindex', KEYS[2], -1);" +
                             // 定义ttl变量
                     "local ttl;" +
                             // 条件一成立：说明lastThreadId不是空，有值
-                            // 条件二成立：说明lastThreadId不等于当前要加锁的客户端的标识
+                            // 条件二成立：说明lastThreadId不等于当前要加锁的客户端的标识（说明当前客户端还没入队）
                     "if lastThreadId ~= false and lastThreadId ~= ARGV[2] then " +
-                            // 更新score值
+                            // 获取lastThreadId的score值，并减去我们传入的currentTime。赋值给ttl
                         "ttl = tonumber(redis.call('zscore', KEYS[3], lastThreadId)) - tonumber(ARGV[4]);" +
                     "else " +
-                            // 获取锁的剩余过期时间
+                            // 走到这，说明lastThreadId是空即等待队列为空 或者 等待队列不是空，但是lastThreadId就是当前请求加锁的客户端
+                            // 直接获取anyLock的剩余过期时间
                         "ttl = redis.call('pttl', KEYS[1]);" +
                     "end;" +
-                            // 为当前的客户端计算一个timeout
+                            // 为当前的客户端计算一个timeout：ttl + threadWaitTime + currentTime
                     "local timeout = ttl + tonumber(ARGV[3]) + tonumber(ARGV[4]);" +
-                            // 条件成立：说明当前客户端标识放入集合KEYS[3]成功
+                            // 条件成立：说明当前客户端和timeout值放入集合KEYS[3]成功
                     "if redis.call('zadd', KEYS[3], timeout, ARGV[2]) == 1 then " +
-                            // 将当前客户端从KEYS[2]队列右边入队
+                            // 将当前客户端从等待队列KEYS[2]的右边入队
                         "redis.call('rpush', KEYS[2], ARGV[2]);" +
                     "end;" +
                             // 返回锁的剩余过期时间，客户端拿到后，如果等待就等待ttl的时间后
