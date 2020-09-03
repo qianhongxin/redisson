@@ -102,6 +102,17 @@ public class RedissonReadLock extends RedissonLock implements RLock {
                                         // 条件二成立：说明加的是写锁，并且加写锁的客户端就是当前过来的客户端
                                         // 所以：如果当前锁模式是读锁，任意想要加读锁的客户端都可以加读锁；如果当前锁模式是写锁并且就是当前客户端加的写锁就可以进入当前if
                                         //       同一个客户端同一个线程，先读锁再写锁，是互斥的，会导致加锁失败
+                                        //        (mode == 'write' and redis.call('hexists', KEYS[1], ARGV[3]) == 1)：writeLock.lock()，然后readLock.lock()是可以的。同一个客户端同一个线程先加写锁的，然后加读锁也是可以成功的，因为读锁这里支持了这种情况
+                                        //              之前的先加写锁结构：anyLock: {
+                                        //                              “mode”: “write”,
+                                        //                              “UUID_01:threadId_01:write”: 1
+                                        //                           }
+                                        //              现在又加读锁后的结构变为：anyLock: {
+                                        //                                  “mode”: “write”,
+                                        //                                  “UUID_01:threadId_01:write”: 1,
+                                        //                                  “UUID_01:threadId_01”: 1
+                                        //                                }
+                                        //                                {anyLock}:UUID_01:threadId_01:rwlock_timeout:1		1
                                 "if (mode == 'read') or (mode == 'write' and redis.call('hexists', KEYS[1], ARGV[3]) == 1) then " +
                                         // 如果ARGV[2]不存在就将ARGV[2]放入KEYS[1]中，存在就自增1
                                         // 将anyLock的UUID_01:threadId_01的值自增1，不存在就设置进去为1
@@ -136,9 +147,9 @@ public class RedissonReadLock extends RedissonLock implements RLock {
 
         return evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
                 // KEYS[1]：getName()，比如 anyLock
-                // KEYS[2]：getChannelName()
+                // KEYS[2]：getChannelName(),比如redisson_rwlock:{anyLock}
                 // KEYS[3]：timeoutPrefix 比如 {anyLock}:UUID_01:threadId_01:rwlock_timeout
-                // KEYS[4]：keyPrefix
+                // KEYS[4]：keyPrefix，比如{anyLock}
                 // ARGV[1]：LockPubSub.UNLOCK_MESSAGE
                 // ARGV[2]：getLockName(threadId)，比如 UUID_01:threadId_01
 
@@ -181,7 +192,7 @@ public class RedissonReadLock extends RedissonLock implements RLock {
                         "counter = tonumber(redis.call('hget', KEYS[1], key)); " +
                         // 条件成立：说明value是数字类型，即对应的key是表示锁的，即不是mode这种
                         "if type(counter) == 'number' then " +
-                            // 遍历counter，即将counter依次减一执行for的逻辑。比如counter是5，则一次执行5,4,3,2,1
+                            // 遍历counter，即将counter依次减一直到1执行for的逻辑。比如counter是5，则一次执行5,4,3,2,1
                             "for i=counter, 1, -1 do " +
                                 // 返回{anyLock}:UUID_01:threadId_01:rwlock_timeout:i的剩余过期时间
                                 "local remainTime = redis.call('pttl', KEYS[4] .. ':' .. key .. ':rwlock_timeout:' .. i); " + 
@@ -198,7 +209,7 @@ public class RedissonReadLock extends RedissonLock implements RLock {
                         // 返回0
                         "return 0; " +
                     "end;" + 
-                        // 条件成立：说明锁类型是写锁
+                        // 条件成立：说明锁类型是写锁。上面的释放锁逻辑也适用于写锁的释放，可以看
                     "if mode == 'write' then " +
                         // 直接返回0
                         "return 0;" + 

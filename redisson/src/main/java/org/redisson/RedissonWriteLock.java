@@ -149,14 +149,15 @@ public class RedissonWriteLock extends RedissonLock implements RLock {
 
                             // 删除KEYS[1]中的ARGV[3]了
                             "redis.call('hdel', KEYS[1], ARGV[3]); " +
-                            // 条件成立：说明哈希表KEYS[1]中字段的数量不是空
+                            // 条件成立：说明anyLock中只有一个mode
+                            // 条件不成立：说明anyLock中还有读锁的key
                             "if (redis.call('hlen', KEYS[1]) == 1) then " +
                                 // 直接删除锁KEYS[1]
                                 "redis.call('del', KEYS[1]); " +
                                 // 发布消息LockPubSub.READ_UNLOCK_MESSAGE到 pub/sub KEYS[2]
                                 "redis.call('publish', KEYS[2], ARGV[1]); " + 
                             "else " +
-                                // 走到这，说明哈希表KEYS[1]中字段的数量是空。直接将KEYS[1]的锁状态设置为read即读锁
+                                // 走到这，说明anyLock还有读锁没释放，这里将锁的状态改成读锁
                                 // has unlocked read-locks
                                 "redis.call('hset', KEYS[1], 'mode', 'read'); " +
                             "end; " +
