@@ -373,6 +373,7 @@ public class RedissonFairLock extends RedissonLock implements RLock {
         return super.sizeInMemoryAsync(keys);
     }
 
+    // pexpire 命令用于设置 key 的过期时间，以毫秒计。key 过期后将不再可用
     @Override
     public RFuture<Boolean> expireAsync(long timeToLive, TimeUnit timeUnit) {
         return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
@@ -383,6 +384,7 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                 timeUnit.toMillis(timeToLive));
     }
 
+    // pexpireat命令用于设置 key 的过期时间，以毫秒计。key 过期后将不再可用
     @Override
     public RFuture<Boolean> expireAtAsync(long timestamp) {
         return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
@@ -393,6 +395,7 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                 timestamp);
     }
 
+    // 执行persist移除锁的过期时间，这样锁就不会过期了
     @Override
     public RFuture<Boolean> clearExpireAsync() {
         return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
@@ -402,7 +405,7 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                 Arrays.<Object>asList(getName(), threadsQueueName, timeoutSetName));
     }
 
-    
+    // 强制释放公平锁
     @Override
     public RFuture<Boolean> forceUnlockAsync() {
         cancelExpirationRenewal(null);

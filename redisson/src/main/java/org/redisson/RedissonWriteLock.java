@@ -61,6 +61,11 @@ public class RedissonWriteLock extends RedissonLock implements RLock {
 
         return evalWriteAsync(getName(), LongCodec.INSTANCE, command,
                             // 注意读锁和写锁共用一个哈希结构的key的。和java一样，读写锁共用一个state值等
+                            // 读写锁数据结构如下：
+                            // anyLock:{
+                            //      mode : write
+                            //      UUID_01:threadId_01 : 2
+                            // }
 
                             // KEYS[1]：getName()
                             // ARGV[1]: internalLockLeaseTime
