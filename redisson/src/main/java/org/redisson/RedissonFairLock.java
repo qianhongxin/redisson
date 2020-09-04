@@ -130,11 +130,13 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                         "end;" +
                             // 获取firstThreadId2在zset集合中的得分，即zscore值。是个时间戳
                         "local timeout = tonumber(redis.call('zscore', KEYS[3], firstThreadId2));" +
-                            // 如果timeout小于等于  currentTime(当前时间（10:00:00）) + threadWaitTime(5000毫秒)
+                            // 条件成立：即timeout小于等于  currentTime(当前时间（10:00:00）) + threadWaitTime(5000毫秒)
+                            // 说明firstThreadId2对应的客户端的过期时间已经到了还没过来续约，说明这个客户端可能已经宕机了或gc等，虽然是在队头，
+                            // 但还是要把它删除掉，因为过期了，没有资格竞争锁
                         "if timeout <= tonumber(ARGV[3]) then " +
                             // remove the item from the queue and timeout set
                             // NOTE we do not alter any other timeout
-                            // fixme
+                            // 删除掉这个过期客户端，让他重新请求
                             "redis.call('zrem', KEYS[3], firstThreadId2);" +
                             "redis.call('lpop', KEYS[2]);" +
                         "else " +
@@ -161,7 +163,7 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                         "local keys = redis.call('zrange', KEYS[3], 0, -1);" +
                             // 遍历全部元素
                         "for i = 1, #keys, 1 do " +
-                            // 将队列元素的得分都减去当前时间戳的值 fixme
+                            // 将队列元素的得分都减去当前时间戳的值
                             "redis.call('zincrby', KEYS[3], -tonumber(ARGV[4]), keys[i]);" +
                         "end;" +
 
@@ -248,7 +250,7 @@ public class RedissonFairLock extends RedissonLock implements RLock {
                         "local keys = redis.call('zrange', KEYS[3], 0, -1);" +
                             // 遍历全部元素
                         "for i = 1, #keys, 1 do " +
-                            // 将元素的得分都减去当前时间戳的值 fixme
+                            // 将元素的得分都减去当前时间戳的值
                             "redis.call('zincrby', KEYS[3], -tonumber(ARGV[3]), keys[i]);" +
                         "end;" +
 
