@@ -42,6 +42,25 @@ import org.redisson.pubsub.CountDownLatchPubSub;
  *
  */
 // 分布式执行体的同步等待
+// trySetCount()，set anyCountDownLatch 3
+//
+//awati()，while true死循环，不断的去判断，get anyCountDownLatch，获取到这个值，如果这个值是>0的话，就说明还没有达到指定数量的客户端去执行countDown的操作，就始终陷入一个死循环之中
+//
+//不是很想给大家去讲那块逻辑，个人认为，redisson源码写的非常好，但是唯一美中不足的一点，就是在这里混入了一些PUBSUB，基于redis去做发布订阅的一些时间，redis怎么能做类似MQ的事情呢？
+//
+//redis怎么能做发布订阅的事情呢？完全违背了这个技术的初衷
+//
+//redis作者的喜好，redis应该发展的方向，是可以支持很多的应用场景，锁、队列、发布订阅，但是我觉得这样子搞就是适得其反
+//
+//await()方法，其实就是陷入一个while true死循环，不断的get anyCountDownLatch的值，如果这个值还是大于0那么就继续死循环，否则的话呢，就退出这个死循环
+//
+//countDown()，decr anyCountDownLatch，就是每次一个客户端执行countDown操作，其实就是将这个cocuntDownLatch的值递减1就可以了。如果这个值已经小于等于0，del anyCcoutnDownLatch，删除掉他就可以ile；
+//
+//如果是这个值为0的时候，还会去发布一个消息，publish redisson_countdownlatch__channel__{anyCountDownLatch} 0
+//
+//可能要花费不少的时间去看里面的细节代码，那块东西我觉得封装的不是特别好，redisson源码别的地方都写的很清晰和漂亮，但是就是PUB/SUB这里，我觉得源码封装的特别不好，易读性不高
+//
+//看源码的时候，抓大放小，既然已经把这个核心原理都给搞定了，那么其实我们就不用纠结于一些细节了
 public class RedissonCountDownLatch extends RedissonObject implements RCountDownLatch {
 
     private final CountDownLatchPubSub pubSub;

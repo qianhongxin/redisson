@@ -44,6 +44,21 @@ import io.netty.util.TimerTask;
  * @author Nikita Koksharov
  *
  */
+// get semaphore，获取到一个当前的值
+//set semaphore 3，将这个信号量同时能够允许获取锁的客户端的数量设置为3
+//
+//get semaphore，获取到一个当前的值，比如说是3，3 > 1
+//decrby semaphore 1，将信号量允许获取锁的客户端的数量递减1，变成2
+//decrby semaphore 1
+//decrby semaphore 1
+//
+//导致semaphore的值变为0，无法允许任何客户端来获取这个值了
+//
+//第四个，第五个，客户端来尝试获取锁，0 >= 1，不是，所以会导致此时获取semaphore的锁会失败，导致进入一个while true的死循环，不断的尝试去获取这个semaphore的锁，如果不行就等待一下，再次死循环去获取，直到有人退出让他获取到这个锁
+//
+//incrby semaphore 1，每次一个客户端释放掉这个锁的话，就会将信号量的值累加1，信号量的值就不是0了
+//
+//其他的客户端此时就可以尝试去获取到这个信号量的锁，再次将这个semaphore的值递减1，变为0，就可以了
 public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
 
     private final SemaphorePubSub semaphorePubSub;
