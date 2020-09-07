@@ -251,6 +251,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
     
     private Long tryAcquire(long leaseTime, TimeUnit unit, long threadId) {
         // tryAcquireAsync(leaseTime, unit, threadId)返回值是个future。所以这里get获取返回值
+        // 异步转同步
         return get(tryAcquireAsync(leaseTime, unit, threadId));
     }
 
