@@ -382,6 +382,7 @@ public class RedissonLock extends RedissonExpirable implements RLock {
         ExpirationEntry entry = new ExpirationEntry();
         // 加入EXPIRATION_RENEWAL_MAP
         ExpirationEntry oldEntry = EXPIRATION_RENEWAL_MAP.putIfAbsent(getEntryName(), entry);
+        // 如果当前线程第一次加锁，这里的oldEntry肯定是null
         if (oldEntry != null) {
             // EXPIRATION_RENEWAL_MAP维护的就是锁名称和线程id的关系
             // oldEntry不是null，说明getEntryName()在本机已经有线程加过锁了，这里再次addThreadId，会给线程的对应的count自增，实现可重入效果
