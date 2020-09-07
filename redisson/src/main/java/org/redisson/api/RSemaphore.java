@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
  * @author Nikita Koksharov
  *
  */
+// 基于Redis实现的信号量
 public interface RSemaphore extends RExpirable, RSemaphoreAsync {
 
     /**

@@ -32,6 +32,7 @@ import org.redisson.command.CommandAsyncExecutor;
  * @author Nikita Koksharov
  *
  */
+// 分布式计数器
 public class RedissonAtomicLong extends RedissonExpirable implements RAtomicLong {
 
     public RedissonAtomicLong(CommandAsyncExecutor commandExecutor, String name) {

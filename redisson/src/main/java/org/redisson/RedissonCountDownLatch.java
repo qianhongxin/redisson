@@ -41,6 +41,7 @@ import org.redisson.pubsub.CountDownLatchPubSub;
  * @author Nikita Koksharov
  *
  */
+// 分布式执行体的同步等待
 public class RedissonCountDownLatch extends RedissonObject implements RCountDownLatch {
 
     private final CountDownLatchPubSub pubSub;

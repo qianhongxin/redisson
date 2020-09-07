@@ -43,6 +43,24 @@ import org.redisson.api.RLock;
 //RedLock算法思想，不能只在一个redis实例上创建锁，应该是在多个redis实例上创建锁，n / 2 + 1，必须在大多数redis节点上都成功创建锁，才能算这个整体的RedLock加锁成功，避免说仅仅在一个redis实例上加锁
 
 // RedLock也是基于RedissonMultiLock实现的。对多个实例加锁，加的锁都是一样的
+
+
+// 不靠谱的：
+// RedLock算法，底层是对应着多个小lock，每个小lock应该是在一个redis实例上去的，他每次都要在大多数的redis master实例上加锁成功，3个master实例，2个master实例上加锁成功，才算是一把锁加成功了
+//
+//有一个客户端，在3个master实例，假设成功在里面加了3个master实例的锁， 不幸的是其中一台master突然宕机，还没同步到slave实例上去，此时他的slave切换成了新的master。
+//
+//另外一个客户端尝试加锁，此时只能在那个新切换过来的那个master实例上加锁，另外两个master是无法成功加锁的，这样就能保证他加锁是不会成功的
+//
+//这个算法就是所谓的RedLock算法
+//
+//大家可以自己去尝试分析一下，枚举一下各种情况，这个算法还是有漏洞的
+//
+//5个master实例，客户端A尝试加锁，仅仅成功的在3个master实例加了锁，成功了；此时不幸的是此时3个master中的1个master突然宕机了，锁key还没同步到他的slave实例上去，此时salve切换为新的master
+//
+//5个master，其中一个是新切换过来的master，其实只有2个master是有客户端A加锁的一个痕迹的，另外3个master是没有这个锁key的
+//
+//然后的不幸的是，此时客户端B来加锁，他其实很有可能可以成功的在3个master上成功加锁，达到了一个大多数的数字，完成了加锁，还是会发生说多个客户端同时重复加锁，所以说也是不是完全靠谱的
 public class RedissonRedLock extends RedissonMultiLock {
 
     /**

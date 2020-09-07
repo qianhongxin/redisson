@@ -33,6 +33,7 @@ import org.redisson.command.CommandAsyncExecutor;
  * @author Nikita Koksharov
  *
  */
+// 分布式计数器
 public class RedissonAtomicDouble extends RedissonExpirable implements RAtomicDouble {
 
     public RedissonAtomicDouble(CommandAsyncExecutor commandExecutor, String name) {
