@@ -65,8 +65,8 @@ public class RedissonReadLock extends RedissonLock implements RLock {
                                 // 读写锁数据结构如下：
                                 // anyLock:{
                                 //      mode : read
-                                //      UUID_01:threadId_01 : 2
-                                //      UUID_02:threadId_02 : 1
+                                //      UUID_01:threadId_01 : 2 （这是读锁的标识）
+                                //      UUID_02:threadId_02 : 1 （这是读锁的标识）
                                 //      ......
                                 // }
                                 // {anyLock}:UUID_01:threadId_01:rwlock_timeout:1 : 1
@@ -102,15 +102,15 @@ public class RedissonReadLock extends RedissonLock implements RLock {
                                         // 条件二成立：说明加的是写锁，并且加写锁的客户端就是当前过来的客户端
                                         // 所以：如果当前锁模式是读锁，任意想要加读锁的客户端都可以加读锁；如果当前锁模式是写锁并且就是当前客户端加的写锁就可以进入当前if
                                         //       同一个客户端同一个线程，先读锁再写锁，是互斥的，会导致加锁失败
-                                        //        (mode == 'write' and redis.call('hexists', KEYS[1], ARGV[3]) == 1)：writeLock.lock()，然后readLock.lock()是可以的。同一个客户端同一个线程先加写锁的，然后加读锁也是可以成功的，因为读锁这里支持了这种情况
+                                        //        (mode == 'write' and redis.call('hexists', KEYS[1], ARGV[3]) == 1)：我们代码中写writeLock.lock()，然后readLock.lock()是可以的。同一个客户端同一个线程先加写锁的，然后加读锁也是可以成功的，因为读锁这里支持了这种情况
                                         //              之前的先加写锁结构：anyLock: {
                                         //                              “mode”: “write”,
                                         //                              “UUID_01:threadId_01:write”: 1
                                         //                           }
                                         //              现在又加读锁后的结构变为：anyLock: {
                                         //                                  “mode”: “write”,
-                                        //                                  “UUID_01:threadId_01:write”: 1,
-                                        //                                  “UUID_01:threadId_01”: 1
+                                        //                                  “UUID_01:threadId_01:write”: 1, （这是写锁的标识）
+                                        //                                  “UUID_01:threadId_01”: 1 （这是读锁的标识）
                                         //                                }
                                         //                                {anyLock}:UUID_01:threadId_01:rwlock_timeout:1		1
                                 "if (mode == 'read') or (mode == 'write' and redis.call('hexists', KEYS[1], ARGV[3]) == 1) then " +
