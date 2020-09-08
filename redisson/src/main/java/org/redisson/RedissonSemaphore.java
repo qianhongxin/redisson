@@ -82,11 +82,13 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
         return "redisson_sc:{" + name + "}";
     }
 
+    // 获取信号量的锁，一次获取一个
     @Override
     public void acquire() throws InterruptedException {
         acquire(1);
     }
 
+    // 获取信号量的锁，一次可获取多个
     @Override
     public void acquire(int permits) throws InterruptedException {
         if (tryAcquire(permits)) {
@@ -96,6 +98,7 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
         RFuture<RedissonLockEntry> future = subscribe();
         commandExecutor.syncSubscriptionInterrupted(future);
         try {
+            // 获取信号量失败会等待一定时间，继续获取信号量
             while (true) {
                 if (tryAcquire(permits)) {
                     return;
@@ -108,12 +111,14 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
         }
 //        get(acquireAsync(permits));
     }
-    
+
+    // 异步获取锁，一次获取一个
     @Override
     public RFuture<Void> acquireAsync() {
         return acquireAsync(1);
     }
-    
+
+    // 异步获取锁，一次可获取多个
     @Override
     public RFuture<Void> acquireAsync(int permits) {
         RPromise<Void> result = new RedissonPromise<Void>();
@@ -262,14 +267,17 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
 
     @Override
     public boolean tryAcquire(int permits) {
+        // 异步转同步
         return get(tryAcquireAsync(permits));
     }
-    
+
+    // 尝试获取1个数量的信号量的锁
     @Override
     public RFuture<Boolean> tryAcquireAsync() {
         return tryAcquireAsync(1);
     }
-    
+
+    // 尝试获取指定数量的信号量的锁
     @Override
     public RFuture<Boolean> tryAcquireAsync(int permits) {
         if (permits < 0) {
@@ -281,19 +289,25 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
 
         return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
                   "local value = redis.call('get', KEYS[1]); " +
+                          //条件成立：信号量存在，且当前的信号量的值大于要扣减的permits
                   "if (value ~= false and tonumber(value) >= tonumber(ARGV[1])) then " +
-                      "local val = redis.call('decrby', KEYS[1], ARGV[1]); " +
+                            // 扣减permits
+                          "local val = redis.call('decrby', KEYS[1], ARGV[1]); " +
+                          // 成功返回1
                       "return 1; " +
                   "end; " +
+                          // 失败返回0
                   "return 0;",
                   Collections.<Object>singletonList(getName()), permits);
     }
 
+    // 支持超时时间的获取信号量
     @Override
     public RFuture<Boolean> tryAcquireAsync(long waitTime, TimeUnit unit) {
         return tryAcquireAsync(1, waitTime, unit);
     }
-    
+
+    // 支持超时时间的获取信号量
     @Override
     public boolean tryAcquire(int permits, long waitTime, TimeUnit unit) throws InterruptedException {
         long time = unit.toMillis(waitTime);
@@ -422,6 +436,7 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
         semaphorePubSub.unsubscribe(future.getNow(), getName(), getChannelName());
     }
 
+    // 获取信号量的锁
     @Override
     public boolean tryAcquire(long time, TimeUnit unit) throws InterruptedException {
         return tryAcquire(1, time, unit);
@@ -441,7 +456,8 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
     public RFuture<Void> releaseAsync() {
         return releaseAsync(1);
     }
-    
+
+    // 释放信号量的锁
     @Override
     public RFuture<Void> releaseAsync(int permits) {
         if (permits < 0) {
@@ -452,7 +468,9 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
         }
 
         return commandExecutor.evalWriteAsync(getName(), StringCodec.INSTANCE, RedisCommands.EVAL_VOID,
-            "local value = redis.call('incrby', KEYS[1], ARGV[1]); " +
+            // 增加信号量的锁值
+                "local value = redis.call('incrby', KEYS[1], ARGV[1]); " +
+                        // 发布消息
             "redis.call('publish', KEYS[2], value); ",
             Arrays.<Object>asList(getName(), getChannelName()), permits);
     }
@@ -462,6 +480,7 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
         return get(drainPermitsAsync());
     }
 
+    // 重置信号量值为0
     @Override
     public RFuture<Integer> drainPermitsAsync() {
         return commandExecutor.evalWriteAsync(getName(), IntegerCodec.INSTANCE, RedisCommands.EVAL_LONG,
@@ -484,17 +503,22 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
         return commandExecutor.writeAsync(getName(), LongCodec.INSTANCE, RedisCommands.GET_INTEGER, getName());
     }
 
+    // 设置信号量的permits大小
     @Override
     public boolean trySetPermits(int permits) {
         return get(trySetPermitsAsync(permits));
     }
-    
+
+    // 设置信号量的permits大小
     @Override
     public RFuture<Boolean> trySetPermitsAsync(int permits) {
         return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
                 "local value = redis.call('get', KEYS[1]); " +
+                        // 如果获取到的permits不存在或者是0，执行设置逻辑
                 "if (value == false or value == 0) then "
+                        // 设置信号量
                     + "redis.call('set', KEYS[1], ARGV[1]); "
+                        // 发布消息
                     + "redis.call('publish', KEYS[2], ARGV[1]); "
                     + "return 1;"
                 + "end;"

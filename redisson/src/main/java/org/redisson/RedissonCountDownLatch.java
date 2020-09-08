@@ -83,6 +83,7 @@ public class RedissonCountDownLatch extends RedissonObject implements RCountDown
         try {
             commandExecutor.syncSubscriptionInterrupted(future);
 
+            // 如果redis的countdownlatch值还是大于0，就一直等待
             while (getCount() > 0) {
                 // waiting for open state
                 future.getNow().getLatch().await();
@@ -305,8 +306,11 @@ public class RedissonCountDownLatch extends RedissonObject implements RCountDown
     @Override
     public RFuture<Void> countDownAsync() {
         return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
+                        // 将锁getName()的值自减1
                         "local v = redis.call('decr', KEYS[1]);" +
+                                // 如果state值 小于等于 0 量，就删除getName()
                         "if v <= 0 then redis.call('del', KEYS[1]) end;" +
+                                // 如果state值等于0，发布消息到队列
                         "if v == 0 then redis.call('publish', KEYS[2], ARGV[1]) end;",
                     Arrays.<Object>asList(getName(), getChannelName()), CountDownLatchPubSub.ZERO_COUNT_MESSAGE);
     }
@@ -319,6 +323,7 @@ public class RedissonCountDownLatch extends RedissonObject implements RCountDown
         return "redisson_countdownlatch__channel__{" + getName() + "}";
     }
 
+    // 获取state值
     @Override
     public long getCount() {
         return get(getCountAsync());
@@ -326,6 +331,7 @@ public class RedissonCountDownLatch extends RedissonObject implements RCountDown
 
     @Override
     public RFuture<Long> getCountAsync() {
+        // 获取name对应的countdownlatch的值
         return commandExecutor.writeAsync(getName(), LongCodec.INSTANCE, RedisCommands.GET_LONG, getName());
     }
 
@@ -334,11 +340,15 @@ public class RedissonCountDownLatch extends RedissonObject implements RCountDown
         return get(trySetCountAsync(count));
     }
 
+    // 设置countdownlatch的state值
     @Override
     public RFuture<Boolean> trySetCountAsync(long count) {
         return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
+                // 条件成立：说明getName()不存在
                 "if redis.call('exists', KEYS[1]) == 0 then "
+                        // 设置getName()，指定值为count
                     + "redis.call('set', KEYS[1], ARGV[2]); "
+                        // 发布消息
                     + "redis.call('publish', KEYS[2], ARGV[1]); "
                     + "return 1 "
                 + "else "
@@ -347,13 +357,18 @@ public class RedissonCountDownLatch extends RedissonObject implements RCountDown
                 Arrays.<Object>asList(getName(), getChannelName()), CountDownLatchPubSub.NEW_COUNT_MESSAGE, count);
     }
 
+    // 删除countdownlatch
     @Override
     public RFuture<Boolean> deleteAsync() {
         return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
+                // 条件成立：说明删除成功
                 "if redis.call('del', KEYS[1]) == 1 then "
+                        // 发布消息
                     + "redis.call('publish', KEYS[2], ARGV[1]); "
+                        // 返回1，删除成功
                     + "return 1 "
                 + "else "
+                        // 返回0，删除失败
                     + "return 0 "
                 + "end",
                 Arrays.<Object>asList(getName(), getChannelName()), CountDownLatchPubSub.NEW_COUNT_MESSAGE);
